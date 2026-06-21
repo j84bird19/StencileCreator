@@ -1,0 +1,1 @@
+Flat ZIP structure example.
