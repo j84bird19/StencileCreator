@@ -4,3 +4,6 @@
 
 /* v5 engine controls */
 #stencilStrategy,#shapeSimplify,#regionStrength{margin-top:7px}
+
+/* v6 portrait engine controls */
+#subjectCleanup,#bgSuppress,#portraitBias{margin-top:7px}

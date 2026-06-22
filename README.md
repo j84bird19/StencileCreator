@@ -1,8 +1,8 @@
-# StencilForge v5
+# StencilForge v6
 
-Shape Separation Engine rebuild.
+Portrait / Airbrush Stencil Engine build.
 
-Preserved:
+## Preserved locked systems
 - Upload image
 - Crop Selection
 - Magic Selection
@@ -15,12 +15,14 @@ Preserved:
 - Save/load settings
 - Flat GitHub Pages structure
 
-New:
-- Stencil Strategy: Shape Separation / Portrait Shadows / Flame / Cartoon
-- Shape Simplify control
-- Region Strength control
-- Better region smoothing
-- Speck removal
-- Cleaner stencil names: Base Silhouette, Deep Shadows, Mid Shadows, Light Details, Highlights
+## New in v6
+- Subject Cleanup: Off / Soft Background Suppression / Strong Portrait Isolation
+- Background Suppression slider
+- Portrait Detail Bias slider
+- Portrait-clean tone engine
+- Better background rejection before stencil generation
+- Better face/hair/tattoo/shadow preservation
+- Cleaner component removal and region smoothing
 
-Unzip first. Upload files to GitHub repo root.
+## Upload
+Unzip this file. Upload the files inside to your GitHub branch root.

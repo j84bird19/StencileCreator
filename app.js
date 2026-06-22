@@ -9,7 +9,7 @@ function loadImg(src){const img=new Image();img.onload=()=>{state.img=img;let ma
 $("#imageInput").onchange=e=>{const f=e.target.files?.[0];if(f)loadImg(URL.createObjectURL(f))};
 $$(".tab").forEach(b=>b.onclick=()=>{$$(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");["photoPanel","ideaPanel","settingsPanel"].forEach(id=>$("#"+id).classList.add("hidden"));$("#"+b.dataset.panel).classList.remove("hidden")});
 $$(".mask").forEach(b=>b.onclick=()=>{$$(".mask").forEach(x=>x.classList.remove("active"));b.classList.add("active");state.tool=b.dataset.tool;state.magic=false;state.cropping=false});
-["brushSize","contrast","brightness","smoothing","detailBoost","minIsland","bridgeThickness","shapeSimplify","regionStrength"].forEach(id=>{$("#"+id).oninput=e=>{const m={brushSize:"brushVal",contrast:"contrastVal",brightness:"brightVal",smoothing:"smoothVal",detailBoost:"detailVal",minIsland:"islandVal",bridgeThickness:"bridgeVal",shapeSimplify:"shapeSimplifyVal",regionStrength:"regionStrengthVal"};$("#"+m[id]).textContent=e.target.value}});
+["brushSize","contrast","brightness","smoothing","detailBoost","minIsland","bridgeThickness","shapeSimplify","regionStrength","bgSuppress","portraitBias"].forEach(id=>{$("#"+id).oninput=e=>{const m={brushSize:"brushVal",contrast:"contrastVal",brightness:"brightVal",smoothing:"smoothVal",detailBoost:"detailVal",minIsland:"islandVal",bridgeThickness:"bridgeVal",shapeSimplify:"shapeSimplifyVal",regionStrength:"regionStrengthVal",bgSuppress:"bgSuppressVal",portraitBias:"portraitBiasVal"};$("#"+m[id]).textContent=e.target.value}});
 $("#undoBtn").onclick=restoreLast; $("#resetBtn").onclick=()=>{if(state.img)loadImg(state.img.src)};
 $("#cropToolBtn").onclick=()=>{state.cropping=true;state.magic=false;state.crop=null;$("#applyCropBtn").classList.remove("hidden");$("#cancelCropBtn").classList.remove("hidden");status("Drag a box around the area to keep, then tap Apply Crop.")};
 $("#cancelCropBtn").onclick=()=>{state.cropping=false;state.crop=null;drawOverlay();$("#applyCropBtn").classList.add("hidden");$("#cancelCropBtn").classList.add("hidden")};
@@ -134,43 +134,137 @@ function mixedLayerData(){
 }
 
 
-/* ---------- V5 Shape Separation Engine ---------- */
-function v5Settings(){
+
+/* ---------- V6 Portrait / Airbrush Stencil Engine ---------- */
+function v6Settings(){
   return {
-    strategy: $("#stencilStrategy")?.value || "shape",
+    strategy: $("#stencilStrategy")?.value || "portrait",
     mode: $("#layerMode")?.value || "tone",
     n: +($("#layerCount")?.value || 5),
     simplify: +($("#shapeSimplify")?.value || 55),
     region: +($("#regionStrength")?.value || 62),
     smoothing: +($("#smoothing")?.value || 42),
-    detail: +($("#detailBoost")?.value || 22)
+    detail: +($("#detailBoost")?.value || 22),
+    cleanup: $("#subjectCleanup")?.value || "soft",
+    bgSuppress: +($("#bgSuppress")?.value || 55),
+    portraitBias: +($("#portraitBias")?.value || 62)
   };
 }
-function v5Dilate(bin,w,h){
-  let o=new Uint8Array(bin.length);
-  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+function clamp255(v){ return Math.max(0, Math.min(255, v)); }
+function v6SourceData(settings){
+  const d=state.baseData, w=cvs.width, h=cvs.height;
+  const out=new ImageData(w,h);
+  const src=d.data, dst=out.data;
+  // Estimate border/background color from edges
+  let br=0,bg=0,bb=0,n=0;
+  const step=Math.max(4,Math.floor(Math.min(w,h)/120));
+  for(let x=0;x<w;x+=step){
+    for(const y of [0,h-1]){
+      const p=(y*w+x)*4; br+=src[p]; bg+=src[p+1]; bb+=src[p+2]; n++;
+    }
+  }
+  for(let y=0;y<h;y+=step){
+    for(const x of [0,w-1]){
+      const p=(y*w+x)*4; br+=src[p]; bg+=src[p+1]; bb+=src[p+2]; n++;
+    }
+  }
+  br/=n; bg/=n; bb/=n;
+  const cx=w*.52, cy=h*.46;
+  const rx=w*.43, ry=h*.52;
+  for(let i=0;i<w*h;i++){
+    const p=i*4, x=i%w, y=Math.floor(i/w);
+    let r=src[p], g=src[p+1], b=src[p+2], a=src[p+3];
+    const bgDist=Math.abs(r-br)+Math.abs(g-bg)+Math.abs(b-bb);
+    const dx=(x-cx)/rx, dy=(y-cy)/ry;
+    const centerWeight=Math.max(0, 1 - (dx*dx+dy*dy));
+    const skinScore=v6SkinScore(r,g,b);
+    const darkScore=(255-(.299*r+.587*g+.114*b))/255;
+    let keep = 1;
+    if(settings.cleanup!=="off"){
+      const suppress=settings.bgSuppress;
+      const bgLike = bgDist < (settings.cleanup==="strong" ? 75+suppress*.9 : 55+suppress*.65);
+      const farFromSubject = centerWeight < (settings.cleanup==="strong" ? .08 : .02);
+      const weakSubject = skinScore < .18 && darkScore < .28;
+    }
+    // JS does not have Python's "and"; keep logic below intentionally explicit.
+    let bgLike = bgDist < (settings.cleanup==="strong" ? 75+settings.bgSuppress*.9 : 55+settings.bgSuppress*.65);
+    let farFromSubject = centerWeight < (settings.cleanup==="strong" ? .08 : .02);
+    let weakSubject = skinScore < .18 && darkScore < .28;
+    if(settings.cleanup!=="off" && bgLike && farFromSubject && weakSubject) keep=.18;
+    if(settings.cleanup==="strong" && centerWeight<.015 && bgDist<145) keep=.05;
+    if(state.mask?.[i]===1) keep=1;
+    if(state.mask?.[i]===-1) keep=0;
+    // brighten suppressed background so it doesn't become stencil detail
+    if(keep<.35){ r=245;g=245;b=245;a=255; }
+    dst[p]=r; dst[p+1]=g; dst[p+2]=b; dst[p+3]=a;
+  }
+  return out;
+}
+function v6SkinScore(r,g,b){
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  const skin = (r>75 && g>40 && b>25 && r>g && r>b && max-min>15) ? 1 : 0;
+  const lightSkin = (r>120 && g>85 && b>65 && r>=g && g>=b-10) ? .75 : 0;
+  return Math.max(skin, lightSkin);
+}
+function v6GrayFromData(imgData, settings){
+  const w=imgData.width,h=imgData.height,src=imgData.data;
+  let gray=new Float32Array(w*h);
+  const con=1+(+($("#contrast")?.value||28)/80), bri=+($("#brightness")?.value||0);
+  for(let i=0;i<w*h;i++){
+    const p=i*4, r=src[p], g=src[p+1], b=src[p+2];
+    let v=.299*r+.587*g+.114*b;
+    const skin=v6SkinScore(r,g,b);
+    const dark=(255-v)/255;
+    // Portrait bias preserves face/hair/tattoo/shadow information while dumping flat background.
+    if(settings.strategy==="portrait" || settings.cleanup!=="off"){
+      if(skin>.3) v = v - settings.portraitBias*.10;
+      if(dark>.46) v = v - settings.portraitBias*.16;
+    }
+    v=(v-128)*con+128+bri;
+    gray[i]=clamp255(v);
+  }
+  return gray;
+}
+function v6Dilate(bin,w,h,rad=1){
+  let out=new Uint8Array(bin.length);
+  for(let y=rad;y<h-rad;y++)for(let x=rad;x<w-rad;x++){
     let hit=0;
-    for(let yy=-1;yy<=1;yy++)for(let xx=-1;xx<=1;xx++) if(bin[(y+yy)*w+x+xx]) hit=1;
-    o[y*w+x]=hit;
+    for(let yy=-rad;yy<=rad;yy++)for(let xx=-rad;xx<=rad;xx++){
+      if(bin[(y+yy)*w+x+xx]) hit=1;
+    }
+    out[y*w+x]=hit;
   }
-  return o;
+  return out;
 }
-function v5Erode(bin,w,h){
-  let o=new Uint8Array(bin.length);
-  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+function v6Erode(bin,w,h,rad=1){
+  let out=new Uint8Array(bin.length);
+  const need=(rad*2+1)*(rad*2+1)*.48;
+  for(let y=rad;y<h-rad;y++)for(let x=rad;x<w-rad;x++){
     let n=0;
-    for(let yy=-1;yy<=1;yy++)for(let xx=-1;xx<=1;xx++) n+=bin[(y+yy)*w+x+xx];
-    o[y*w+x]=n>=5?1:0;
+    for(let yy=-rad;yy<=rad;yy++)for(let xx=-rad;xx<=rad;xx++) n+=bin[(y+yy)*w+x+xx];
+    out[y*w+x]=n>=need?1:0;
   }
-  return o;
+  return out;
 }
-function v5RemoveSpecks(bin,w,h,minSize){
+function v6CleanRegion(bin,w,h,settings,layerIndex){
+  let a=bin;
+  const baseRad = settings.strategy==="cartoon" ? 2 : 1;
+  const reps = Math.max(1, Math.round(settings.simplify/32));
+  for(let i=0;i<reps;i++) a=v6Dilate(a,w,h,baseRad);
+  for(let i=0;i<reps;i++) a=v6Erode(a,w,h,baseRad);
+  if(settings.simplify>25) a=clean(a,w,h,Math.max(1,Math.round(settings.simplify/28)));
+  a=v6RemoveComponents(a,w,h,Math.round(settings.region*(layerIndex<=1?1.8:1.15)));
+  a=processIslands(a,w,h);
+  return a;
+}
+function v6RemoveComponents(bin,w,h,minSize){
   const seen=new Uint8Array(w*h), out=new Uint8Array(w*h);
   for(let i=0;i<w*h;i++){
     if(!bin[i]||seen[i]) continue;
-    let q=[i], pix=[], qi=0; seen[i]=1;
+    let q=[i], pix=[], qi=0, minx=w,miny=h,maxx=0,maxy=0; seen[i]=1;
     while(qi<q.length){
-      let id=q[qi++], x=id%w, y=Math.floor(id/w); pix.push(id);
+      let id=q[qi++], x=id%w, y=Math.floor(id/w);
+      pix.push(id); minx=Math.min(minx,x); maxx=Math.max(maxx,x); miny=Math.min(miny,y); maxy=Math.max(maxy,y);
       [1,-1,w,-w].forEach(o=>{
         let ni=id+o, nx=ni%w, ny=Math.floor(ni/w);
         if(ni>=0&&ni<w*h&&Math.abs(nx-x)+Math.abs(ny-y)===1&&bin[ni]&&!seen[ni]){
@@ -178,47 +272,53 @@ function v5RemoveSpecks(bin,w,h,minSize){
         }
       });
     }
-    if(pix.length>=minSize) pix.forEach(p=>out[p]=1);
+    const width=maxx-minx+1, height=maxy-miny+1;
+    const keep = pix.length>=minSize || (width>Math.min(w,h)*.18 && height>Math.min(w,h)*.18);
+    if(keep) pix.forEach(p=>out[p]=1);
   }
   return out;
 }
-function v5Morph(bin,w,h,settings){
-  let a=bin;
-  let reps=Math.max(1,Math.round(settings.simplify/28));
-  for(let i=0;i<reps;i++) a=v5Dilate(a,w,h);
-  for(let i=0;i<reps;i++) a=v5Erode(a,w,h);
-  if(settings.simplify>35) a=clean(a,w,h,Math.max(1,Math.round(settings.simplify/26)));
-  if(settings.simplify>65) a=v5RemoveSpecks(a,w,h,Math.round(settings.region*2.5));
-  return a;
+function v6EdgeMap(gray,w,h,settings){
+  const e=edges(gray,w,h);
+  let bin=new Uint8Array(w*h);
+  const threshold = settings.strategy==="portrait" ? 92-settings.detail*.55 : 105-settings.detail*.45;
+  for(let i=0;i<w*h;i++){
+    if(e[i]>threshold) bin[i]=1;
+    if(state.mask?.[i]===-1) bin[i]=0;
+  }
+  return v6CleanRegion(bin,w,h,{...settings,simplify:Math.min(settings.simplify,45),region:settings.region*.6},2);
 }
-function v5ToneBins(settings){
-  const w=cvs.width,h=cvs.height,n=settings.n;
-  let gray=adjustedGray();
-  const smooth = settings.strategy==="cartoon" ? settings.smoothing/12 : settings.smoothing/16;
-  gray=blur(gray,w,h,Math.max(1,Math.round(smooth)));
-  const ed=edges(gray,w,h);
-  const bins=[];
+function v6ToneLayers(){
+  const settings=v6Settings(), src=v6SourceData(settings), w=src.width,h=src.height,n=settings.n;
+  let gray=v6GrayFromData(src,settings);
+  const smoothPx=Math.max(1,Math.round(settings.smoothing/(settings.strategy==="portrait"?20:16)));
+  gray=blur(gray,w,h,smoothPx);
+  const edgeLayer=v6EdgeMap(gray,w,h,settings);
+  let layers=[];
   for(let l=0;l<n;l++){
     const low=255-(l+1)*255/n, high=255-l*255/n;
     let bin=new Uint8Array(w*h);
     for(let i=0;i<w*h;i++){
-      let hit = n===1 ? gray[i]<215 : (gray[i]>=low && gray[i]<high);
-      const edgeLimit = settings.strategy==="flame" ? 88 : settings.strategy==="portrait" ? 95 : 110;
-      if(ed[i]>(edgeLimit-settings.detail) && l<Math.ceil(n*.62)) hit=true;
+      let v=gray[i];
+      let hit = n===1 ? v<220 : (v>=low && v<high);
+      if(l===0 && edgeLayer[i]) hit=true;
+      if(l===1 && edgeLayer[i] && settings.strategy==="portrait") hit=true;
       if(state.mask?.[i]===-1) hit=false;
       bin[i]=hit?1:0;
     }
-    bins.push(processIslands(v5Morph(bin,w,h,settings),w,h));
+    bin=v6CleanRegion(bin,w,h,settings,l);
+    layers.push(bin);
   }
-  return bins;
+  return {bins:layers,w,h};
 }
-function v5ColorBins(settings){
-  const d=state.baseData,w=cvs.width,h=cvs.height,n=settings.n;
+function v6ColorLayers(){
+  const settings=v6Settings(), src=v6SourceData(settings), w=src.width,h=src.height,n=settings.n;
   const bins=Array.from({length:n},()=>new Uint8Array(w*h));
+  const data=src.data;
   for(let i=0;i<w*h;i++){
     if(state.mask?.[i]===-1) continue;
-    const p=i*4, r=d.data[p], g=d.data[p+1], b=d.data[p+2];
-    const max=Math.max(r,g,b), min=Math.min(r,g,b), light=(max+min)/2;
+    const p=i*4,r=data[p],g=data[p+1],b=data[p+2];
+    const max=Math.max(r,g,b),min=Math.min(r,g,b),light=(max+min)/2;
     let hue=0;
     if(max!==min){
       const diff=max-min;
@@ -226,35 +326,39 @@ function v5ColorBins(settings){
       else if(max===g) hue=60*((b-r)/diff)+120;
       else hue=60*((r-g)/diff)+240;
     }
-    let idx=Math.floor(((hue/360)*0.55+((255-light)/255)*0.45)*n);
+    const skin=v6SkinScore(r,g,b);
+    let idx=Math.floor(((hue/360)*.42+((255-light)/255)*.48+skin*.10)*n);
     idx=Math.max(0,Math.min(n-1,idx));
     bins[idx][i]=1;
   }
-  return bins.map(b=>processIslands(v5Morph(b,w,h,settings),w,h));
+  return {bins:bins.map((b,i)=>v6CleanRegion(b,w,h,settings,i)),w,h};
 }
-function v5GenerateLayers(){
+function v6GenerateLayers(){
   if(!state.baseData){status("Upload image first.");return}
   if($("#autoRecommend")?.checked) analyzeAndRecommend();
-  const settings=v5Settings(), n=settings.n;
-  let bins;
-  if(settings.mode==="color") bins=v5ColorBins(settings);
+  const settings=v6Settings();
+  let result;
+  if(settings.mode==="color") result=v6ColorLayers();
   else if(settings.mode==="both"){
-    const toneCount=Math.ceil(n/2);
-    const oldN=settings.n;
-    settings.n=toneCount; const tone=v5ToneBins(settings);
-    settings.n=oldN-toneCount; const color=v5ColorBins(settings);
-    settings.n=oldN; bins=[...tone,...color].slice(0,n);
-  } else bins=v5ToneBins(settings);
+    const tone=v6ToneLayers();
+    const color=v6ColorLayers();
+    const half=Math.ceil(settings.n/2);
+    result={bins:[...tone.bins.slice(0,half),...color.bins.slice(0,settings.n-half)],w:tone.w,h:tone.h};
+  } else result=v6ToneLayers();
   const names=["Base Silhouette","Deep Shadows","Mid Shadows","Light Details","Highlights"];
-  state.layers=bins.map((bin,i)=>({name:names[i]||`Stencil ${i+1}`,color:state.colors[i%state.colors.length],bin,w:cvs.width,h:cvs.height,visible:true}));
+  state.layers=result.bins.slice(0,settings.n).map((bin,i)=>({
+    name:names[i]||`Stencil ${i+1}`,
+    color:state.colors[i%state.colors.length],
+    bin,w:result.w,h:result.h,visible:true
+  }));
   renderLayers();
-  status(`V5 shape engine generated ${state.layers.length} stencil${state.layers.length>1?"s":""}.`);
+  status(`V6 generated ${state.layers.length} portrait-clean stencil${state.layers.length>1?"s":""}.`);
 }
-function traceBoundarySvg(ly){
+function v6SvgRegions(ly){
   const w=ly.w,h=ly.h,bin=ly.bin;
   const simplify=+($("#shapeSimplify")?.value||55);
-  const step=Math.max(2,Math.round(simplify/24));
-  const rx=Math.max(1,simplify/55);
+  const step=Math.max(2,Math.round(simplify/22));
+  const rx=Math.max(1,simplify/48);
   let rects=[];
   for(let y=0;y<h;y+=step){
     let x=0;
@@ -269,11 +373,12 @@ function traceBoundarySvg(ly){
   return `<g fill="${ly.color}" stroke="none">${rects.join("")}</g>`;
 }
 function svgFor(ly){
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ly.w} ${ly.h}" width="${ly.w}" height="${ly.h}"><title>${ly.name}</title>${traceBoundarySvg(ly)}${$("#registration").checked?regSvg(ly.w,ly.h):""}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ly.w} ${ly.h}" width="${ly.w}" height="${ly.h}"><title>${ly.name}</title>${v6SvgRegions(ly)}${$("#registration").checked?regSvg(ly.w,ly.h):""}</svg>`;
 }
-
-function generate(){ v5GenerateLayers(); }
+function generate(){ v6GenerateLayers(); }
 $("#generateBtn").onclick=generate;
+
+
 if($("#recommendBtn")) $("#recommendBtn").onclick=()=>{const r=analyzeAndRecommend();status(r.msg);};
 function renderLayers(){const lc=$("#layerControls"),pr=$("#previews");lc.innerHTML="";pr.innerHTML="";state.layers.forEach((ly,i)=>{let row=document.createElement("div");row.className="layerRow";row.innerHTML=`<div class="swatch" style="background:${ly.color}"></div><div><b>${ly.name}</b><br><small>${i===0?"Darkest":i===state.layers.length-1?"Lightest":"Tone"}</small></div><button class="eye">${ly.visible?"◉":"○"}</button>`;row.querySelector(".swatch").onclick=()=>{let inp=document.createElement("input");inp.type="color";inp.value=ly.color;inp.oninput=()=>{ly.color=inp.value;renderLayers()};inp.click()};row.querySelector(".eye").onclick=()=>{ly.visible=!ly.visible;renderLayers()};lc.appendChild(row);if(ly.visible){let card=document.createElement("div");card.className="preview";let c=document.createElement("canvas");c.width=ly.w;c.height=ly.h;drawLayerCanvas(c,ly);card.appendChild(c);let p=document.createElement("p");p.textContent=ly.name;card.appendChild(p);pr.appendChild(card)}})}
 function drawLayerCanvas(c,ly){let g=c.getContext("2d");g.clearRect(0,0,c.width,c.height);if($("#showBg").checked){g.fillStyle="#fff";g.fillRect(0,0,c.width,c.height)}g.fillStyle=ly.color;g.filter=`blur(${Math.max(0,+$("#smoothing").value/45)}px)`;let path=new Path2D();for(let y=0;y<ly.h;y++){let x=0;while(x<ly.w){while(x<ly.w&&!ly.bin[y*ly.w+x])x++;if(x>=ly.w)break;let x0=x;while(x<ly.w&&ly.bin[y*ly.w+x])x++;path.rect(x0,y,x-x0,1)}}g.fill(path);g.filter="none";if($("#registration").checked)drawReg(g,ly.w,ly.h)}
@@ -284,7 +389,7 @@ function svgFor(ly){return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 function safe(){return ($("#projectName").value||"stencilforge_project").toLowerCase().replace(/[^a-z0-9_-]+/g,"_")}
 function dl(name,text,type="image/svg+xml"){let a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 $("#downloadLayersBtn").onclick=()=>{let ls=state.layers.filter(l=>l.visible);if(!ls.length){status("Generate layers first.");return}ls.forEach((l,i)=>setTimeout(()=>dl(`${safe()}_${l.name.replace(/\s+/g,"_").toLowerCase()}.svg`,svgFor(l)),i*220));status("Downloading individual SVG layer files.")}
-$("#downloadCombinedBtn").onclick=()=>{let ls=state.layers.filter(l=>l.visible);if(!ls.length){status("Generate layers first.");return}let w=ls[0].w,h=ls[0].h,body=ls.map(l=>`<g id="${l.name.replace(/\s+/g,"_")}">${traceBoundarySvg(l)}</g>`).join("\n");dl(`${safe()}_combined.svg`,`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${body}${$("#registration").checked?regSvg(w,h):""}</svg>`)}
+$("#downloadCombinedBtn").onclick=()=>{let ls=state.layers.filter(l=>l.visible);if(!ls.length){status("Generate layers first.");return}let w=ls[0].w,h=ls[0].h,body=ls.map(l=>`<g id="${l.name.replace(/\s+/g,"_")}">${v6SvgRegions(l)}</g>`).join("\n");dl(`${safe()}_combined.svg`,`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${body}${$("#registration").checked?regSvg(w,h):""}</svg>`)}
 $("#saveBtn").onclick=()=>{localStorage.setItem("stencilforge_v3",JSON.stringify({name:$("#projectName").value,settings:{layerCount:$("#layerCount").value,preset:$("#preset").value,contrast:$("#contrast").value,brightness:$("#brightness").value,smoothing:$("#smoothing").value,detailBoost:$("#detailBoost").value,minIsland:$("#minIsland").value,bridgeThickness:$("#bridgeThickness").value,layerMode:$("#layerMode")?.value,conversionMode:$("#conversionMode")?.value,toneDetail:$("#toneDetail")?.value,autoRecommend:$("#autoRecommend")?.checked}}));status("Project settings saved.")}
 $("#loadBtn").onclick=()=>{let p=JSON.parse(localStorage.getItem("stencilforge_v3")||"null");if(!p){status("No saved project found.");return}$("#projectName").value=p.name||"stencilforge_project";Object.entries(p.settings||{}).forEach(([k,v])=>{let el=$("#"+k);if(el){el.value=v;el.dispatchEvent(new Event("input"))}});status("Project settings loaded.")}
 $("#ideaBtn").onclick=()=>{let text=$("#ideaText").value||"cute stencil creature";let c=document.createElement("canvas");c.width=900;c.height=900;let g=c.getContext("2d");g.fillStyle="#fff";g.fillRect(0,0,900,900);g.fillStyle="#d97cff";g.beginPath();g.arc(185,185,32,0,7);g.fill();g.fillStyle="#4d3fb7";g.beginPath();g.ellipse(455,455,185,245,0,0,7);g.fill();g.fillStyle="#8f6bff";g.beginPath();g.ellipse(455,330,150,115,0,0,7);g.fill();g.fillStyle="#4d3fb7";g.beginPath();g.moveTo(335,280);g.lineTo(285,120);g.lineTo(410,245);g.moveTo(575,280);g.lineTo(625,120);g.lineTo(500,245);g.fill();g.fillStyle="#fff";g.beginPath();g.arc(405,330,28,0,7);g.arc(505,330,28,0,7);g.fill();g.fillStyle="#21183f";g.beginPath();g.arc(405,330,12,0,7);g.arc(505,330,12,0,7);g.fill();g.strokeStyle="#21183f";g.lineWidth=18;g.beginPath();g.moveTo(325,500);g.quadraticCurveTo(180,380,140,620);g.moveTo(585,500);g.quadraticCurveTo(730,380,770,620);g.stroke();g.fillStyle="#4d3fb7";g.font="bold 32px system-ui";g.textAlign="center";g.fillText(text.slice(0,48),450,840);loadImg(c.toDataURL())}
