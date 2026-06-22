@@ -1,0 +1,15 @@
+{
+  "name": "StencilForge",
+  "short_name": "StencilForge",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#050812",
+  "theme_color": "#070b14",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect width='128' height='128' rx='24' fill='%23070814'/%3E%3Ctext x='64' y='78' text-anchor='middle' font-size='58' fill='%238a55ff'%3ES%3C/text%3E%3C/svg%3E",
+      "sizes": "128x128",
+      "type": "image/svg+xml"
+    }
+  ]
+}
