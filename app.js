@@ -9,7 +9,7 @@ function loadImg(src){const img=new Image();img.onload=()=>{state.img=img;let ma
 $("#imageInput").onchange=e=>{const f=e.target.files?.[0];if(f)loadImg(URL.createObjectURL(f))};
 $$(".tab").forEach(b=>b.onclick=()=>{$$(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");["photoPanel","ideaPanel","settingsPanel"].forEach(id=>$("#"+id).classList.add("hidden"));$("#"+b.dataset.panel).classList.remove("hidden")});
 $$(".mask").forEach(b=>b.onclick=()=>{$$(".mask").forEach(x=>x.classList.remove("active"));b.classList.add("active");state.tool=b.dataset.tool;state.magic=false;state.cropping=false});
-["brushSize","contrast","brightness","smoothing","detailBoost","minIsland","bridgeThickness"].forEach(id=>{$("#"+id).oninput=e=>{const m={brushSize:"brushVal",contrast:"contrastVal",brightness:"brightVal",smoothing:"smoothVal",detailBoost:"detailVal",minIsland:"islandVal",bridgeThickness:"bridgeVal"};$("#"+m[id]).textContent=e.target.value}});
+["brushSize","contrast","brightness","smoothing","detailBoost","minIsland","bridgeThickness","shapeSimplify","regionStrength"].forEach(id=>{$("#"+id).oninput=e=>{const m={brushSize:"brushVal",contrast:"contrastVal",brightness:"brightVal",smoothing:"smoothVal",detailBoost:"detailVal",minIsland:"islandVal",bridgeThickness:"bridgeVal",shapeSimplify:"shapeSimplifyVal",regionStrength:"regionStrengthVal"};$("#"+m[id]).textContent=e.target.value}});
 $("#undoBtn").onclick=restoreLast; $("#resetBtn").onclick=()=>{if(state.img)loadImg(state.img.src)};
 $("#cropToolBtn").onclick=()=>{state.cropping=true;state.magic=false;state.crop=null;$("#applyCropBtn").classList.remove("hidden");$("#cancelCropBtn").classList.remove("hidden");status("Drag a box around the area to keep, then tap Apply Crop.")};
 $("#cancelCropBtn").onclick=()=>{state.cropping=false;state.crop=null;drawOverlay();$("#applyCropBtn").classList.add("hidden");$("#cancelCropBtn").classList.add("hidden")};
@@ -30,19 +30,262 @@ function edges(gray,w,h){let e=new Float32Array(w*h);for(let y=1;y<h-1;y++)for(l
 function clean(bin,w,h,reps){let a=bin,b=new Uint8Array(bin.length);for(let r=0;r<reps;r++){for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){let n=0;for(let yy=-1;yy<=1;yy++)for(let xx=-1;xx<=1;xx++)n+=a[(y+yy)*w+x+xx];b[y*w+x]=n>=5?1:0}[a,b]=[b,a];b.fill(0)}return a}
 function processIslands(bin,w,h){const min=+$("#minIsland").value,bridge=+$("#bridgeThickness").value,seen=new Uint8Array(w*h),comps=[];for(let i=0;i<w*h;i++){if(!bin[i]||seen[i])continue;let q=[i],qi=0,pix=[],sx=0,sy=0,minx=w,miny=h,maxx=0,maxy=0;seen[i]=1;while(qi<q.length){let id=q[qi++],x=id%w,y=Math.floor(id/w);pix.push(id);sx+=x;sy+=y;minx=Math.min(minx,x);miny=Math.min(miny,y);maxx=Math.max(maxx,x);maxy=Math.max(maxy,y);[1,-1,w,-w].forEach(o=>{let ni=id+o,nx=ni%w,ny=Math.floor(ni/w);if(ni>=0&&ni<w*h&&Math.abs(nx-x)+Math.abs(ny-y)===1&&bin[ni]&&!seen[ni]){seen[ni]=1;q.push(ni)}})}comps.push({pix,count:pix.length,cx:sx/pix.length,cy:sy/pix.length,minx,miny,maxx,maxy})}if(!comps.length)return bin;comps.sort((a,b)=>b.count-a.count);let out=new Uint8Array(bin.length);comps.forEach((c,i)=>{if(i===0||!$("#removeSmall").checked||c.count>=min)c.pix.forEach(p=>out[p]=1)});if(bridge>0&&comps.length>1){let main=comps[0];for(let i=1;i<comps.length;i++){let c=comps[i];if(c.count<min)continue;let tx=Math.max(main.minx,Math.min(main.maxx,c.cx)),ty=Math.max(main.miny,Math.min(main.maxy,c.cy));drawLine(out,w,h,c.cx,c.cy,tx,ty,Math.max(1,Math.round(bridge/3)))}}return out}
 function drawLine(bin,w,h,x0,y0,x1,y1,r){let steps=Math.max(Math.abs(x1-x0),Math.abs(y1-y0),1);for(let s=0;s<=steps;s++){let x=Math.round(x0+(x1-x0)*s/steps),y=Math.round(y0+(y1-y0)*s/steps);for(let yy=y-r;yy<=y+r;yy++)for(let xx=x-r;xx<=x+r;xx++)if(xx>=0&&yy>=0&&xx<w&&yy<h&&(xx-x)**2+(yy-y)**2<=r*r)bin[yy*w+xx]=1}}
-function generate(){if(!state.baseData){status("Upload image first.");return}let w=cvs.width,h=cvs.height,n=+$("#layerCount").value,gray=adjustedGray(),smoothPx=Math.round(+$("#smoothing").value/18);gray=blur(gray,w,h,smoothPx);let ed=edges(gray,w,h),detail=+$("#detailBoost").value;state.layers=[];for(let l=0;l<n;l++){let low=255-(l+1)*255/n,high=255-l*255/n,bin=new Uint8Array(w*h);for(let i=0;i<w*h;i++){let hit=gray[i]>=low&&gray[i]<high;if(detail&&ed[i]>(105-detail)&&l<Math.ceil(n*.55))hit=true;if(state.mask?.[i]===-1)hit=false;bin[i]=hit?1:0}if($("#edgeClean").checked)bin=clean(bin,w,h,Math.max(1,Math.round(+$("#smoothing").value/25)));bin=processIslands(bin,w,h);state.layers.push({name:`Layer ${l+1}`,color:state.colors[l%state.colors.length],bin,w,h,visible:true})}renderLayers();status(`Generated ${n} cleaner stencil layers.`)}
+
+function imageComplexityScore(){
+  if(!state.baseData) return {score:0,recommended:3,msg:"Upload an image first."};
+  const w=cvs.width,h=cvs.height;
+  const gray=adjustedGray();
+  const ed=edges(gray,w,h);
+  let edgeSum=0,dark=0,samples=0;
+  for(let i=0;i<gray.length;i+=4){
+    edgeSum+=ed[i];
+    if(gray[i]<150) dark++;
+    samples++;
+  }
+  const edgeAvg=edgeSum/Math.max(1,samples);
+  const darkRatio=dark/Math.max(1,samples);
+  const score=Math.min(100,Math.round(edgeAvg*1.1+darkRatio*35));
+  let recommended=3;
+  if(score<25) recommended=1;
+  else if(score<40) recommended=2;
+  else if(score<58) recommended=3;
+  else if(score<76) recommended=4;
+  else recommended=5;
+  return {score,recommended,msg:`Complexity ${score}/100 → recommended ${recommended} stencil${recommended>1?"s":""}.`};
+}
+function analyzeAndRecommend(){
+  const r=imageComplexityScore();
+  const box=$("#recommendText");
+  if(box) box.textContent=r.msg;
+  const auto=$("#autoRecommend");
+  if(state.baseData && auto && auto.checked) $("#layerCount").value=String(r.recommended);
+  return r;
+}
+function toneLayerData(){
+  const w=cvs.width,h=cvs.height,n=+$("#layerCount").value;
+  let gray=adjustedGray();
+  const conversion=$("#conversionMode")?.value||"grayscale";
+  const detail=$("#toneDetail")?.value||"standard";
+  let smoothPx=Math.round(+$("#smoothing").value/(detail==="detailed"?28:detail==="major"?12:18));
+  gray=blur(gray,w,h,smoothPx);
+  const ed=edges(gray,w,h);
+  let detailBoost=+$("#detailBoost").value;
+  if(detail==="major") detailBoost*=0.45;
+  if(detail==="detailed") detailBoost*=1.35;
+  const layers=[];
+  for(let l=0;l<n;l++){
+    const low=255-(l+1)*255/n, high=255-l*255/n;
+    let bin=new Uint8Array(w*h);
+    for(let i=0;i<w*h;i++){
+      let v=gray[i];
+      if(conversion==="bw") v=v<128?0:255;
+      let hit=n===1 ? v<210 : (v>=low&&v<high);
+      if(detailBoost&&ed[i]>(105-detailBoost)&&l<Math.ceil(n*.55)) hit=true;
+      if(state.mask?.[i]===-1) hit=false;
+      bin[i]=hit?1:0;
+    }
+    if($("#edgeClean").checked) bin=clean(bin,w,h,Math.max(1,Math.round(+$("#smoothing").value/25)));
+    bin=processIslands(bin,w,h);
+    layers.push({name:`Tone Layer ${l+1}`,color:state.colors[l%state.colors.length],bin,w,h,visible:true});
+  }
+  return layers;
+}
+function colorLayerData(){
+  const d=state.baseData,w=cvs.width,h=cvs.height,n=+$("#layerCount").value;
+  const buckets=[];
+  for(let i=0;i<n;i++) buckets.push({r:0,g:0,b:0,count:0,bin:new Uint8Array(w*h)});
+  for(let i=0;i<w*h;i++){
+    if(state.mask?.[i]===-1) continue;
+    const p=i*4;
+    const r=d.data[p],g=d.data[p+1],b=d.data[p+2];
+    const max=Math.max(r,g,b),min=Math.min(r,g,b),light=(max+min)/2;
+    let hue=0;
+    if(max!==min){
+      const diff=max-min;
+      if(max===r) hue=(60*((g-b)/diff)+360)%360;
+      else if(max===g) hue=60*((b-r)/diff)+120;
+      else hue=60*((r-g)/diff)+240;
+    }
+    let idx=Math.floor(((hue/360)*0.65+((255-light)/255)*0.35)*n);
+    idx=Math.max(0,Math.min(n-1,idx));
+    buckets[idx].r+=r; buckets[idx].g+=g; buckets[idx].b+=b; buckets[idx].count++;
+    buckets[idx].bin[i]=1;
+  }
+  return buckets.map((b,i)=>{
+    let color=state.colors[i%state.colors.length];
+    if(b.count>0){
+      const r=Math.round(b.r/b.count),g=Math.round(b.g/b.count),bb=Math.round(b.b/b.count);
+      color="#"+[r,g,bb].map(x=>x.toString(16).padStart(2,"0")).join("");
+    }
+    let bin=b.bin;
+    if($("#edgeClean").checked) bin=clean(bin,w,h,Math.max(1,Math.round(+$("#smoothing").value/32)));
+    bin=processIslands(bin,w,h);
+    return {name:`Color Layer ${i+1}`,color,bin,w,h,visible:true};
+  });
+}
+function mixedLayerData(){
+  const n=+$("#layerCount").value;
+  if(n===1) return toneLayerData();
+  const tone=toneLayerData();
+  const color=colorLayerData();
+  const tCount=Math.ceil(n/2);
+  const cCount=n-tCount;
+  return [...tone.slice(0,tCount),...color.slice(0,cCount)].slice(0,n).map((l,i)=>({...l,name:`Mixed Layer ${i+1}`}));
+}
+
+
+/* ---------- V5 Shape Separation Engine ---------- */
+function v5Settings(){
+  return {
+    strategy: $("#stencilStrategy")?.value || "shape",
+    mode: $("#layerMode")?.value || "tone",
+    n: +($("#layerCount")?.value || 5),
+    simplify: +($("#shapeSimplify")?.value || 55),
+    region: +($("#regionStrength")?.value || 62),
+    smoothing: +($("#smoothing")?.value || 42),
+    detail: +($("#detailBoost")?.value || 22)
+  };
+}
+function v5Dilate(bin,w,h){
+  let o=new Uint8Array(bin.length);
+  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+    let hit=0;
+    for(let yy=-1;yy<=1;yy++)for(let xx=-1;xx<=1;xx++) if(bin[(y+yy)*w+x+xx]) hit=1;
+    o[y*w+x]=hit;
+  }
+  return o;
+}
+function v5Erode(bin,w,h){
+  let o=new Uint8Array(bin.length);
+  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+    let n=0;
+    for(let yy=-1;yy<=1;yy++)for(let xx=-1;xx<=1;xx++) n+=bin[(y+yy)*w+x+xx];
+    o[y*w+x]=n>=5?1:0;
+  }
+  return o;
+}
+function v5RemoveSpecks(bin,w,h,minSize){
+  const seen=new Uint8Array(w*h), out=new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++){
+    if(!bin[i]||seen[i]) continue;
+    let q=[i], pix=[], qi=0; seen[i]=1;
+    while(qi<q.length){
+      let id=q[qi++], x=id%w, y=Math.floor(id/w); pix.push(id);
+      [1,-1,w,-w].forEach(o=>{
+        let ni=id+o, nx=ni%w, ny=Math.floor(ni/w);
+        if(ni>=0&&ni<w*h&&Math.abs(nx-x)+Math.abs(ny-y)===1&&bin[ni]&&!seen[ni]){
+          seen[ni]=1; q.push(ni);
+        }
+      });
+    }
+    if(pix.length>=minSize) pix.forEach(p=>out[p]=1);
+  }
+  return out;
+}
+function v5Morph(bin,w,h,settings){
+  let a=bin;
+  let reps=Math.max(1,Math.round(settings.simplify/28));
+  for(let i=0;i<reps;i++) a=v5Dilate(a,w,h);
+  for(let i=0;i<reps;i++) a=v5Erode(a,w,h);
+  if(settings.simplify>35) a=clean(a,w,h,Math.max(1,Math.round(settings.simplify/26)));
+  if(settings.simplify>65) a=v5RemoveSpecks(a,w,h,Math.round(settings.region*2.5));
+  return a;
+}
+function v5ToneBins(settings){
+  const w=cvs.width,h=cvs.height,n=settings.n;
+  let gray=adjustedGray();
+  const smooth = settings.strategy==="cartoon" ? settings.smoothing/12 : settings.smoothing/16;
+  gray=blur(gray,w,h,Math.max(1,Math.round(smooth)));
+  const ed=edges(gray,w,h);
+  const bins=[];
+  for(let l=0;l<n;l++){
+    const low=255-(l+1)*255/n, high=255-l*255/n;
+    let bin=new Uint8Array(w*h);
+    for(let i=0;i<w*h;i++){
+      let hit = n===1 ? gray[i]<215 : (gray[i]>=low && gray[i]<high);
+      const edgeLimit = settings.strategy==="flame" ? 88 : settings.strategy==="portrait" ? 95 : 110;
+      if(ed[i]>(edgeLimit-settings.detail) && l<Math.ceil(n*.62)) hit=true;
+      if(state.mask?.[i]===-1) hit=false;
+      bin[i]=hit?1:0;
+    }
+    bins.push(processIslands(v5Morph(bin,w,h,settings),w,h));
+  }
+  return bins;
+}
+function v5ColorBins(settings){
+  const d=state.baseData,w=cvs.width,h=cvs.height,n=settings.n;
+  const bins=Array.from({length:n},()=>new Uint8Array(w*h));
+  for(let i=0;i<w*h;i++){
+    if(state.mask?.[i]===-1) continue;
+    const p=i*4, r=d.data[p], g=d.data[p+1], b=d.data[p+2];
+    const max=Math.max(r,g,b), min=Math.min(r,g,b), light=(max+min)/2;
+    let hue=0;
+    if(max!==min){
+      const diff=max-min;
+      if(max===r) hue=(60*((g-b)/diff)+360)%360;
+      else if(max===g) hue=60*((b-r)/diff)+120;
+      else hue=60*((r-g)/diff)+240;
+    }
+    let idx=Math.floor(((hue/360)*0.55+((255-light)/255)*0.45)*n);
+    idx=Math.max(0,Math.min(n-1,idx));
+    bins[idx][i]=1;
+  }
+  return bins.map(b=>processIslands(v5Morph(b,w,h,settings),w,h));
+}
+function v5GenerateLayers(){
+  if(!state.baseData){status("Upload image first.");return}
+  if($("#autoRecommend")?.checked) analyzeAndRecommend();
+  const settings=v5Settings(), n=settings.n;
+  let bins;
+  if(settings.mode==="color") bins=v5ColorBins(settings);
+  else if(settings.mode==="both"){
+    const toneCount=Math.ceil(n/2);
+    const oldN=settings.n;
+    settings.n=toneCount; const tone=v5ToneBins(settings);
+    settings.n=oldN-toneCount; const color=v5ColorBins(settings);
+    settings.n=oldN; bins=[...tone,...color].slice(0,n);
+  } else bins=v5ToneBins(settings);
+  const names=["Base Silhouette","Deep Shadows","Mid Shadows","Light Details","Highlights"];
+  state.layers=bins.map((bin,i)=>({name:names[i]||`Stencil ${i+1}`,color:state.colors[i%state.colors.length],bin,w:cvs.width,h:cvs.height,visible:true}));
+  renderLayers();
+  status(`V5 shape engine generated ${state.layers.length} stencil${state.layers.length>1?"s":""}.`);
+}
+function traceBoundarySvg(ly){
+  const w=ly.w,h=ly.h,bin=ly.bin;
+  const simplify=+($("#shapeSimplify")?.value||55);
+  const step=Math.max(2,Math.round(simplify/24));
+  const rx=Math.max(1,simplify/55);
+  let rects=[];
+  for(let y=0;y<h;y+=step){
+    let x=0;
+    while(x<w){
+      while(x<w&&!bin[y*w+x]) x+=step;
+      if(x>=w) break;
+      let x0=x;
+      while(x<w&&bin[y*w+x]) x+=step;
+      rects.push(`<rect x="${x0}" y="${y}" width="${x-x0}" height="${step}" rx="${rx}" ry="${rx}"/>`);
+    }
+  }
+  return `<g fill="${ly.color}" stroke="none">${rects.join("")}</g>`;
+}
+function svgFor(ly){
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ly.w} ${ly.h}" width="${ly.w}" height="${ly.h}"><title>${ly.name}</title>${traceBoundarySvg(ly)}${$("#registration").checked?regSvg(ly.w,ly.h):""}</svg>`;
+}
+
+function generate(){ v5GenerateLayers(); }
 $("#generateBtn").onclick=generate;
+if($("#recommendBtn")) $("#recommendBtn").onclick=()=>{const r=analyzeAndRecommend();status(r.msg);};
 function renderLayers(){const lc=$("#layerControls"),pr=$("#previews");lc.innerHTML="";pr.innerHTML="";state.layers.forEach((ly,i)=>{let row=document.createElement("div");row.className="layerRow";row.innerHTML=`<div class="swatch" style="background:${ly.color}"></div><div><b>${ly.name}</b><br><small>${i===0?"Darkest":i===state.layers.length-1?"Lightest":"Tone"}</small></div><button class="eye">${ly.visible?"◉":"○"}</button>`;row.querySelector(".swatch").onclick=()=>{let inp=document.createElement("input");inp.type="color";inp.value=ly.color;inp.oninput=()=>{ly.color=inp.value;renderLayers()};inp.click()};row.querySelector(".eye").onclick=()=>{ly.visible=!ly.visible;renderLayers()};lc.appendChild(row);if(ly.visible){let card=document.createElement("div");card.className="preview";let c=document.createElement("canvas");c.width=ly.w;c.height=ly.h;drawLayerCanvas(c,ly);card.appendChild(c);let p=document.createElement("p");p.textContent=ly.name;card.appendChild(p);pr.appendChild(card)}})}
 function drawLayerCanvas(c,ly){let g=c.getContext("2d");g.clearRect(0,0,c.width,c.height);if($("#showBg").checked){g.fillStyle="#fff";g.fillRect(0,0,c.width,c.height)}g.fillStyle=ly.color;g.filter=`blur(${Math.max(0,+$("#smoothing").value/45)}px)`;let path=new Path2D();for(let y=0;y<ly.h;y++){let x=0;while(x<ly.w){while(x<ly.w&&!ly.bin[y*ly.w+x])x++;if(x>=ly.w)break;let x0=x;while(x<ly.w&&ly.bin[y*ly.w+x])x++;path.rect(x0,y,x-x0,1)}}g.fill(path);g.filter="none";if($("#registration").checked)drawReg(g,ly.w,ly.h)}
 function drawReg(g,w,h){g.strokeStyle="#111";g.lineWidth=Math.max(3,w/250);let s=Math.max(20,w/32);[[s,s],[w-s,s],[s,h-s],[w-s,h-s]].forEach(([x,y])=>{g.beginPath();g.moveTo(x-s/2,y);g.lineTo(x+s/2,y);g.moveTo(x,y-s/2);g.lineTo(x,y+s/2);g.stroke()})}
 function svgRects(ly){let rects=[],step=2,rx=Math.max(.5,+$("#smoothing").value/80);for(let y=0;y<ly.h;y+=step){let x=0;while(x<ly.w){while(x<ly.w&&!ly.bin[y*ly.w+x])x+=step;if(x>=ly.w)break;let x0=x;while(x<ly.w&&ly.bin[y*ly.w+x])x+=step;rects.push(`<rect x="${x0}" y="${y}" width="${x-x0}" height="${step}" rx="${rx}" ry="${rx}"/>`)}}return rects.join("")}
 function regSvg(w,h){let s=Math.max(20,w/32),sw=Math.max(3,w/250),o="";[[s,s],[w-s,s],[s,h-s],[w-s,h-s]].forEach(([x,y])=>{o+=`<path d="M${x-s/2} ${y}L${x+s/2} ${y}M${x} ${y-s/2}L${x} ${y+s/2}" stroke="#111" stroke-width="${sw}" fill="none"/>`});return o}
-function svgFor(ly){return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ly.w} ${ly.h}" width="${ly.w}" height="${ly.h}"><title>${ly.name}</title><g fill="${ly.color}" stroke="none">${svgRects(ly)}</g>${$("#registration").checked?regSvg(ly.w,ly.h):""}</svg>`}
+function svgFor(ly){return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ly.w} ${ly.h}" width="${ly.w}" height="${ly.h}"><title>${ly.name}</title>${traceBoundarySvg(ly)}${$("#registration").checked?regSvg(ly.w,ly.h):""}</svg>`}
 function safe(){return ($("#projectName").value||"stencilforge_project").toLowerCase().replace(/[^a-z0-9_-]+/g,"_")}
 function dl(name,text,type="image/svg+xml"){let a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 $("#downloadLayersBtn").onclick=()=>{let ls=state.layers.filter(l=>l.visible);if(!ls.length){status("Generate layers first.");return}ls.forEach((l,i)=>setTimeout(()=>dl(`${safe()}_${l.name.replace(/\s+/g,"_").toLowerCase()}.svg`,svgFor(l)),i*220));status("Downloading individual SVG layer files.")}
-$("#downloadCombinedBtn").onclick=()=>{let ls=state.layers.filter(l=>l.visible);if(!ls.length){status("Generate layers first.");return}let w=ls[0].w,h=ls[0].h,body=ls.map(l=>`<g id="${l.name.replace(/\s+/g,"_")}" fill="${l.color}">${svgRects(l)}</g>`).join("\n");dl(`${safe()}_combined.svg`,`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${body}${$("#registration").checked?regSvg(w,h):""}</svg>`)}
-$("#saveBtn").onclick=()=>{localStorage.setItem("stencilforge_v3",JSON.stringify({name:$("#projectName").value,settings:{layerCount:$("#layerCount").value,preset:$("#preset").value,contrast:$("#contrast").value,brightness:$("#brightness").value,smoothing:$("#smoothing").value,detailBoost:$("#detailBoost").value,minIsland:$("#minIsland").value,bridgeThickness:$("#bridgeThickness").value}}));status("Project settings saved.")}
+$("#downloadCombinedBtn").onclick=()=>{let ls=state.layers.filter(l=>l.visible);if(!ls.length){status("Generate layers first.");return}let w=ls[0].w,h=ls[0].h,body=ls.map(l=>`<g id="${l.name.replace(/\s+/g,"_")}">${traceBoundarySvg(l)}</g>`).join("\n");dl(`${safe()}_combined.svg`,`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${body}${$("#registration").checked?regSvg(w,h):""}</svg>`)}
+$("#saveBtn").onclick=()=>{localStorage.setItem("stencilforge_v3",JSON.stringify({name:$("#projectName").value,settings:{layerCount:$("#layerCount").value,preset:$("#preset").value,contrast:$("#contrast").value,brightness:$("#brightness").value,smoothing:$("#smoothing").value,detailBoost:$("#detailBoost").value,minIsland:$("#minIsland").value,bridgeThickness:$("#bridgeThickness").value,layerMode:$("#layerMode")?.value,conversionMode:$("#conversionMode")?.value,toneDetail:$("#toneDetail")?.value,autoRecommend:$("#autoRecommend")?.checked}}));status("Project settings saved.")}
 $("#loadBtn").onclick=()=>{let p=JSON.parse(localStorage.getItem("stencilforge_v3")||"null");if(!p){status("No saved project found.");return}$("#projectName").value=p.name||"stencilforge_project";Object.entries(p.settings||{}).forEach(([k,v])=>{let el=$("#"+k);if(el){el.value=v;el.dispatchEvent(new Event("input"))}});status("Project settings loaded.")}
 $("#ideaBtn").onclick=()=>{let text=$("#ideaText").value||"cute stencil creature";let c=document.createElement("canvas");c.width=900;c.height=900;let g=c.getContext("2d");g.fillStyle="#fff";g.fillRect(0,0,900,900);g.fillStyle="#d97cff";g.beginPath();g.arc(185,185,32,0,7);g.fill();g.fillStyle="#4d3fb7";g.beginPath();g.ellipse(455,455,185,245,0,0,7);g.fill();g.fillStyle="#8f6bff";g.beginPath();g.ellipse(455,330,150,115,0,0,7);g.fill();g.fillStyle="#4d3fb7";g.beginPath();g.moveTo(335,280);g.lineTo(285,120);g.lineTo(410,245);g.moveTo(575,280);g.lineTo(625,120);g.lineTo(500,245);g.fill();g.fillStyle="#fff";g.beginPath();g.arc(405,330,28,0,7);g.arc(505,330,28,0,7);g.fill();g.fillStyle="#21183f";g.beginPath();g.arc(405,330,12,0,7);g.arc(505,330,12,0,7);g.fill();g.strokeStyle="#21183f";g.lineWidth=18;g.beginPath();g.moveTo(325,500);g.quadraticCurveTo(180,380,140,620);g.moveTo(585,500);g.quadraticCurveTo(730,380,770,620);g.stroke();g.fillStyle="#4d3fb7";g.font="bold 32px system-ui";g.textAlign="center";g.fillText(text.slice(0,48),450,840);loadImg(c.toDataURL())}
 let deferred=null;window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferred=e;$("#installBtn").hidden=false});$("#installBtn").onclick=()=>{if(deferred){deferred.prompt();deferred=null;$("#installBtn").hidden=true}};if("serviceWorker"in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
