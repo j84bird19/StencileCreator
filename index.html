@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d0f18" />
+  <title>StencilForge</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>StencilForge</h1>
+      <p>Photo or idea → layered SVG airbrush stencils for laser cutting</p>
+    </div>
+    <button id="installBtn" class="ghost hidden">Install</button>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls">
+      <div class="segmented">
+        <button id="sourcePhoto" class="active">Upload Photo</button>
+        <button id="sourceIdea">Describe Idea</button>
+      </div>
+
+      <div id="photoPane" class="pane">
+        <label>Upload any picture style</label>
+        <input id="imageInput" type="file" accept="image/*" />
+        <p class="hint">Works best with high contrast images, tattoo flash, line art, logos, or clear photos.</p>
+      </div>
+
+      <div id="ideaPane" class="pane hidden">
+        <label>Describe a picture or idea</label>
+        <textarea id="ideaText" placeholder="Example: a raven sitting on a crescent moon with roses, bold tattoo stencil"></textarea>
+        <label>Change style</label>
+        <select id="styleSelect">
+          <option value="clean">Clean stencil</option>
+          <option value="tattoo">Tattoo flash</option>
+          <option value="comic">Comic ink</option>
+          <option value="graffiti">Graffiti</option>
+          <option value="logo">Logo / decal</option>
+          <option value="realistic">High contrast realistic</option>
+        </select>
+        <button id="generateIdea" class="primary wide">Generate local sketch</button>
+        <p class="hint warn">Local sketch only. Real AI text-to-image needs a safe backend/API key later.</p>
+      </div>
+
+      <div class="rule"></div>
+      <h2>Edit before making layers</h2>
+      <div class="toolgrid">
+        <button id="keepTool" class="primary">Keep brush</button>
+        <button id="removeTool">Remove brush</button>
+        <button id="restoreBtn">Restore image</button>
+        <button id="clearBtn">Clear canvas</button>
+      </div>
+
+      <label>Brush size: <span id="brushValue">30</span></label>
+      <input id="brushSize" type="range" min="4" max="100" value="30" />
+
+      <label>Number of layers: <span id="layerCountValue">5</span></label>
+      <input id="layerCount" type="range" min="2" max="12" value="5" />
+
+      <label>Cut detail</label>
+      <select id="detailLevel">
+        <option value="8">High detail / more cut lines</option>
+        <option value="14" selected>Medium detail</option>
+        <option value="24">Low detail / cleaner cuts</option>
+      </select>
+
+      <label>Stencil bridge thickness: <span id="bridgeValue">5</span></label>
+      <input id="bridgeSize" type="range" min="1" max="18" value="5" />
+
+      <label class="checkline"><input id="autoBridge" type="checkbox" checked /> Auto-connect floating parts</label>
+      <label class="checkline"><input id="registrationMarks" type="checkbox" checked /> Add registration marks</label>
+
+      <button id="makeLayers" class="gold wide">Make Stencil Layers</button>
+    </section>
+
+    <section class="panel workspace">
+      <div class="canvasWrap"><canvas id="workCanvas" width="900" height="650"></canvas></div>
+      <div class="statusbar">
+        <span id="status">Ready. Upload a photo or describe an idea.</span>
+      </div>
+    </section>
+
+    <section class="panel layersPanel">
+      <h2>Layer colors</h2>
+      <div id="layerControls"></div>
+      <label>Project name</label>
+      <input id="projectName" value="stencilforge_project" />
+      <div class="toolgrid single">
+        <button id="downloadEach" class="primary">Download SVG layers</button>
+        <button id="downloadCombined">Download combined SVG</button>
+        <button id="saveProject">Save project</button>
+        <button id="loadProject">Load saved</button>
+      </div>
+      <p class="hint">Color is for keeping painting layers organized. Each SVG layer is made as one attached stencil shape with optional bridges.</p>
+    </section>
+  </main>
+
+  <section class="preview panel">
+    <h2>Layer previews</h2>
+    <div id="previews" class="previewGrid"></div>
+  </section>
+
+  <footer>StencilForge v1 — flat GitHub-ready build</footer>
+  <script src="app.js"></script>
+</body>
+</html>
